@@ -38,6 +38,27 @@ __device__ inline static void load(RT &dst, const ST &src) {
     const int laneid = kittens::laneid() % kittens::WARP_THREADS;
     const uint32_t src_ptr = reinterpret_cast<uintptr_t>(&src.data[0]);
 
+    if constexpr (sizeof(typename ST::dtype) == 1) {
+        const int row_offset = laneid % 16;
+        const int col_offset = 8 * (laneid / 16);
+
+        #pragma unroll
+        for(int j = 0; j < dst.width; j++) {
+            const int col = j*dst.tile_size_col + col_offset;
+            uint32_t addr = src.idx(src_ptr, {row_offset, col});
+            #pragma unroll
+            for(int i = 0; i < dst.height; i++) {
+                asm volatile(
+                    "ds_read_b64 %0, %1 offset:%2\n"
+                    : "=v"(*reinterpret_cast<uint64_t*>(&dst.tiles[i][j].data[0]))
+                    : "v"(addr), "i"(i * ST::underlying_cols * kittens::TILE_ROW_DIM<U> * sizeof(U))
+                    : "memory"
+                );
+            }
+        }
+        return;
+    }
+
     int row_offset, col_offset;
     if constexpr (std::is_same_v<typename RT::layout, ducks::rt_layout::row>) {
         row_offset = laneid%16;

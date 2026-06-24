@@ -10,8 +10,9 @@
 
 #pragma once
 
-#include <hip_bf16.h>
-#include <hip_fp16.h>
+#include <hip/hip_bf16.h>
+#include <hip/hip_fp16.h>
+#include <hip/hip_fp8.h>
 #include <string>
 #include <bit>
 
@@ -35,6 +36,22 @@ using bf16_2 = __hip_bfloat162;
  */
 using half_2 = __half2;
 
+#if defined(KITTENS_CDNA3)
+using fp8e4m3 = __hip_fp8_e4m3_fnuz;
+using fp8e4m3_2 = __hip_fp8x2_e4m3_fnuz;
+using fp8e4m3_4 = __hip_fp8x4_e4m3_fnuz;
+using fp8e5m2 = __hip_fp8_e5m2_fnuz;
+using fp8e5m2_2 = __hip_fp8x2_e5m2_fnuz;
+using fp8e5m2_4 = __hip_fp8x4_e5m2_fnuz;
+#else
+using fp8e4m3 = __hip_fp8_e4m3;
+using fp8e4m3_2 = __hip_fp8x2_e4m3;
+using fp8e4m3_4 = __hip_fp8x4_e4m3;
+using fp8e5m2 = __hip_fp8_e5m2;
+using fp8e5m2_2 = __hip_fp8x2_e5m2;
+using fp8e5m2_4 = __hip_fp8x4_e5m2;
+#endif
+
 namespace ducks {
 /**
  * @namespace base_types
@@ -44,9 +61,9 @@ namespace ducks {
 namespace base_types {
 
 template<typename T>
-concept T2 = std::is_same_v<T, float2> || std::is_same_v<T, bf16_2> || std::is_same_v<T, half_2>;
+concept T2 = std::is_same_v<T, float2> || std::is_same_v<T, bf16_2> || std::is_same_v<T, half_2> || std::is_same_v<T, fp8e4m3_4> || std::is_same_v<T, fp8e5m2_4>;
 template<typename T>
-concept T1 = std::is_same_v<T, float>  || std::is_same_v<T, bf16  > || std::is_same_v<T, half>;
+concept T1 = std::is_same_v<T, float>  || std::is_same_v<T, bf16  > || std::is_same_v<T, half> || std::is_same_v<T, fp8e4m3> || std::is_same_v<T, fp8e5m2>;
 
 } // namespace base_types
 } // namespace ducks
@@ -114,6 +131,30 @@ template<> struct constants<half_2> {
     static __device__ inline constexpr half_2 one()       { return std::bit_cast<half_2>(uint32_t(0x3C003C00)); }
     static __device__ inline constexpr half_2 pos_infty() { return std::bit_cast<half_2>(uint32_t(0x7C007C00)); }
     static __device__ inline constexpr half_2 neg_infty() { return std::bit_cast<half_2>(uint32_t(0xFC00FC00)); }
+};
+template<> struct constants<fp8e4m3> {
+    static __device__ inline constexpr fp8e4m3 zero() { return std::bit_cast<fp8e4m3>(uint8_t(0x00)); }
+    static __device__ inline constexpr fp8e4m3 one()  { return std::bit_cast<fp8e4m3>(uint8_t(0x38)); }
+};
+template<> struct constants<fp8e4m3_2> {
+    static __device__ inline constexpr fp8e4m3_2 zero() { return std::bit_cast<fp8e4m3_2>(uint16_t(0x0000)); }
+    static __device__ inline constexpr fp8e4m3_2 one()  { return std::bit_cast<fp8e4m3_2>(uint16_t(0x3838)); }
+};
+template<> struct constants<fp8e4m3_4> {
+    static __device__ inline constexpr fp8e4m3_4 zero() { return std::bit_cast<fp8e4m3_4>(uint32_t(0x00000000)); }
+    static __device__ inline constexpr fp8e4m3_4 one()  { return std::bit_cast<fp8e4m3_4>(uint32_t(0x38383838)); }
+};
+template<> struct constants<fp8e5m2> {
+    static __device__ inline constexpr fp8e5m2 zero() { return std::bit_cast<fp8e5m2>(uint8_t(0x00)); }
+    static __device__ inline constexpr fp8e5m2 one()  { return std::bit_cast<fp8e5m2>(uint8_t(0x3C)); }
+};
+template<> struct constants<fp8e5m2_2> {
+    static __device__ inline constexpr fp8e5m2_2 zero() { return std::bit_cast<fp8e5m2_2>(uint16_t(0x0000)); }
+    static __device__ inline constexpr fp8e5m2_2 one()  { return std::bit_cast<fp8e5m2_2>(uint16_t(0x3C3C)); }
+};
+template<> struct constants<fp8e5m2_4> {
+    static __device__ inline constexpr fp8e5m2_4 zero() { return std::bit_cast<fp8e5m2_4>(uint32_t(0x00000000)); }
+    static __device__ inline constexpr fp8e5m2_4 one()  { return std::bit_cast<fp8e5m2_4>(uint32_t(0x3C3C3C3C)); }
 };
 template<> struct constants<int> {
     static __device__ inline constexpr int zero()      { return 0; }
@@ -191,6 +232,26 @@ template<> struct packing<int2> {
     using unpacked_type = int;
     using packed_type = int2;
     static __device__ inline constexpr int2 pack(const int &i) { return int2{i, i}; } // this replication makes code cleaner later.
+};
+template<> struct packing<fp8e4m3> {
+    static __device__ inline constexpr int num() { return 1; }
+    using unpacked_type = fp8e4m3;
+    using packed_type = fp8e4m3_4;
+};
+template<> struct packing<fp8e4m3_4> {
+    static __device__ inline constexpr int num() { return 4; }
+    using unpacked_type = fp8e4m3;
+    using packed_type = fp8e4m3_4;
+};
+template<> struct packing<fp8e5m2> {
+    static __device__ inline constexpr int num() { return 1; }
+    using unpacked_type = fp8e5m2;
+    using packed_type = fp8e5m2_4;
+};
+template<> struct packing<fp8e5m2_4> {
+    static __device__ inline constexpr int num() { return 4; }
+    using unpacked_type = fp8e5m2;
+    using packed_type = fp8e5m2_4;
 };
 template<> struct packing<float4> {
     static __device__ inline constexpr int num() { return 4; }
