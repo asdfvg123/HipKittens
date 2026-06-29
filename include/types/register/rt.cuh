@@ -51,7 +51,7 @@ struct identifier {};
  * 
  * In general, you probably want a row-major tile, unless you specifically want to call mma
  */
-template<typename _T, int _rows, int _cols, ducks::rt_layout::all _layout=ducks::rt_layout::row>
+template<typename _T, int _rows, int _cols, ducks::rt_layout::all _layout=ducks::rt_layout::row, int _base_rows = -1, int _base_cols = -1>
 struct rt {
     using identifier = ducks::rt::identifier; ///< Type identifier for the rt structure.
     using layout = _layout; ///< Layout of the matrix tile.
@@ -60,23 +60,27 @@ struct rt {
     using T2 = kittens::base_types::packing<_T>::packed_type;
     using dtype = T2; ///< Data type of the matrix elements
 
+    // _base_rows/_base_cols default (-1) keep the standard MFMA base tile; override to express
+    // other MFMA base shapes (e.g. 32x32 acc, 32x16 fp8 operand for the 32x32x16 MFMA).
+    using base_tile = rt_base<T, layout, _base_rows, _base_cols>;
+
     static constexpr int rows                = _rows; ///< Total number of rows.
-    static_assert(rows % rt_base<T, layout>::tile_size_row == 0, "Rows must be divisible by the tile size");
+    static_assert(rows % base_tile::tile_size_row == 0, "Rows must be divisible by the tile size");
     static constexpr int cols                = _cols; ///< Total number of columns.
-    static_assert(cols % rt_base<T, layout>::tile_size_col == 0, "Columns must be divisible by the tile size");
-    static constexpr int height              = rows / rt_base<T, layout>::tile_size_row; ///< Height in subtiles.
-    static constexpr int width               = cols / rt_base<T, layout>::tile_size_col; ///< Width in subtiles.
-    static constexpr int tile_size_row        = rt_base<T, layout>::tile_size_row;        ///< Size of the base tile.
-    static constexpr int tile_size_col        = rt_base<T, layout>::tile_size_col;        ///< Size of the base tile.
-    static constexpr int num_elements        = rt_base<T, layout>::num_elements        * width * height; ///< Total number of elements.
-    static constexpr int elements_per_thread = rt_base<T, layout>::elements_per_thread * width * height; ///< Elements handled per thread.
-    static constexpr int packed_per_thread   = rt_base<T, layout>::packed_per_thread   * width * height; ///< Packed elements per thread.
-    static constexpr int packed_per_tile     = rt_base<T, layout>::packed_per_thread; ///< Packed elements per tile.
+    static_assert(cols % base_tile::tile_size_col == 0, "Columns must be divisible by the tile size");
+    static constexpr int height              = rows / base_tile::tile_size_row; ///< Height in subtiles.
+    static constexpr int width               = cols / base_tile::tile_size_col; ///< Width in subtiles.
+    static constexpr int tile_size_row        = base_tile::tile_size_row;        ///< Size of the base tile.
+    static constexpr int tile_size_col        = base_tile::tile_size_col;        ///< Size of the base tile.
+    static constexpr int num_elements        = base_tile::num_elements        * width * height; ///< Total number of elements.
+    static constexpr int elements_per_thread = base_tile::elements_per_thread * width * height; ///< Elements handled per thread.
+    static constexpr int packed_per_thread   = base_tile::packed_per_thread   * width * height; ///< Packed elements per thread.
+    static constexpr int packed_per_tile     = base_tile::packed_per_thread; ///< Packed elements per tile.
 
-    rt_base<T, layout> tiles[height][width]; ///< The actual storage for the matrix tile, organized in subtiles.
+    base_tile tiles[height][width]; ///< The actual storage for the matrix tile, organized in subtiles.
 
-    using row_vec = rv<T, cols, typename rt_base<T, layout>::row_vec_layout>; ///< A type representing a column vector for this tile.
-    using col_vec = rv<T, rows, typename rt_base<T, layout>::col_vec_layout>; ///< A type representing a column vector for this tile.
+    using row_vec = rv<T, cols, typename base_tile::row_vec_layout>; ///< A type representing a column vector for this tile.
+    using col_vec = rv<T, rows, typename base_tile::col_vec_layout>; ///< A type representing a column vector for this tile.
 };
 
 /* ----------  CONCEPTS  ---------- */

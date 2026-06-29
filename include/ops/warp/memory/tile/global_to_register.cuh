@@ -179,6 +179,33 @@ __device__ inline static void store(const GL &dst, const RT &src, const COORD &i
     const int row_stride = dst.template stride<axis>();
     const int laneid = kittens::laneid();
 
+    if constexpr (RT::tile_size_row == 32) {
+        // 32x32x16 acc: lane holds 16 float (data[0..7]); calculator C/D mapping
+        //   i = 8*floor(g/4) + 4*floor(lane/32) + (g%4) ; j = lane%32 ; g = 0..15
+        const int col_offset = laneid % 32;
+        const int row_base   = 4 * (laneid / 32);
+        #pragma unroll
+        for (int i = 0; i < src.height; i++) {
+            #pragma unroll
+            for (int j = 0; j < src.width; j++) {
+                const int col = j * src.tile_size_col + col_offset;
+                #pragma unroll
+                for (int g = 0; g < 16; g++) {
+                    const int ii = 8 * (g / 4) + row_base + (g % 4);
+                    const float val = (g % 2 == 0) ? src.tiles[i][j].data[g / 2].x
+                                                    : src.tiles[i][j].data[g / 2].y;
+#ifdef STORE_DUMP_II
+                    dst_ptr[(i * src.tile_size_row + ii) * row_stride + col] = (U)ii;
+#else
+                    dst_ptr[(i * src.tile_size_row + ii) * row_stride + col] =
+                        base_types::convertor<U, T>::convert(val);
+#endif
+                }
+            }
+        }
+        return;
+    }
+
     const int row_offset = 4*(laneid/16), col_offset = laneid%16;
 
     #pragma unroll

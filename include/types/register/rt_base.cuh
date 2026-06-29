@@ -43,7 +43,7 @@ struct identifier {};
  * 
  * In general, you probably want a row-major tile, unless you specifically want to call mma
  */
-template<typename _T, ducks::rt_layout::all _layout> struct rt_base {
+template<typename _T, ducks::rt_layout::all _layout, int _base_rows = -1, int _base_cols = -1> struct rt_base {
     using identifier = ducks::rt_base::identifier; ///< Type identifier for the rt_base structure.
     using layout = _layout; ///< Layout of the matrix tile.
     static_assert(kittens::ducks::base_types::T1<_T>); // confirm it's a supported type
@@ -56,8 +56,10 @@ template<typename _T, ducks::rt_layout::all _layout> struct rt_base {
         "rt_base was provided an unsupported type."
     );
 
-    static constexpr int tile_size_row        = kittens::TILE_ROW_DIM<T>;
-    static constexpr int tile_size_col        = kittens::TILE_COL_DIM<T>;
+    // _base_rows/_base_cols default (-1) keep the standard 16x16 (or 16x32 fp8) MFMA base tile;
+    // override them to express other MFMA base shapes (e.g. 32x32 acc, 32x16 fp8 operand).
+    static constexpr int tile_size_row        = _base_rows < 0 ? kittens::TILE_ROW_DIM<T> : _base_rows;
+    static constexpr int tile_size_col        = _base_cols < 0 ? kittens::TILE_COL_DIM<T> : _base_cols;
     static constexpr int rows                 = tile_size_row; ///< Number of rows.
     static constexpr int cols                 = tile_size_col; ///< Number of cols.
     static constexpr int num_elements         = rows*cols;

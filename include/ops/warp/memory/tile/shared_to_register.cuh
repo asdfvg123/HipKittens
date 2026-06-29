@@ -27,8 +27,12 @@ namespace kittens {
 template<ducks::rt::all RT, ducks::st::all ST>
 __device__ inline static void load(RT &dst, const ST &src) {
 
-    static_assert(RT::height == ST::height, "register tile and shared tile must match height");
-    static_assert(RT::width  == ST::width,  "register tile and shared tile must match width");
+    // 32-row MFMA base tiles use a different base shape than the shared tile (16-row),
+    // so compare absolute rows/cols rather than subtile counts.
+    static_assert(RT::tile_size_row == 32 ? (RT::rows == ST::rows) : (RT::height == ST::height),
+                  "register tile and shared tile must match height");
+    static_assert(RT::tile_size_row == 32 ? (RT::cols == ST::cols) : (RT::width == ST::width),
+                  "register tile and shared tile must match width");
 
     using T2 = RT::dtype;
     using T  = base_types::packing<T2>::unpacked_type;
@@ -38,6 +42,28 @@ __device__ inline static void load(RT &dst, const ST &src) {
     const int laneid = kittens::laneid() % kittens::WARP_THREADS;
     const uint32_t src_ptr = reinterpret_cast<uintptr_t>(&src.data[0]);
 
+    if constexpr (sizeof(typename ST::dtype) == 1 && RT::tile_size_row == 32) {
+        // 32x16 fp8 operand for 32x32x16 MFMA: one ds_read_b64 (8 fp8) per base tile.
+        //   A[i][k]: lane = 32*floor(k/8)+i -> row = lane%32, col(K) = 8*floor(lane/32)
+        const int row_offset = laneid % 32;
+        const int col_offset = 8 * (laneid / 32);
+
+        #pragma unroll
+        for(int j = 0; j < dst.width; j++) {
+            const int col = j*dst.tile_size_col + col_offset;
+            #pragma unroll
+            for(int i = 0; i < dst.height; i++) {
+                uint32_t addr = src.idx(src_ptr, {i*dst.tile_size_row + row_offset, col});
+                asm volatile(
+                    "ds_read_b64 %0, %1 offset:0\n"
+                    : "=v"(*reinterpret_cast<uint64_t*>(&dst.tiles[i][j].data[0]))
+                    : "v"(addr)
+                    : "memory"
+                );
+            }
+        }
+        return;
+    }
     if constexpr (sizeof(typename ST::dtype) == 1) {
         const int row_offset = laneid % 16;
         const int col_offset = 8 * (laneid / 16);

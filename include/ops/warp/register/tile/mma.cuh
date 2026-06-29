@@ -72,6 +72,21 @@ __device__ static inline void mfma163232(float2 (&D)[2],
         *(long*)A, *(long*)B, *(float4_t*)C, 0, 0, 0);
 }
 
+// 32x32x16 fp8 MFMA: acc is 32x32 (lane holds 16 float), operands are 32x16 (lane holds 8 fp8).
+__device__ static inline void mfma323216(float2 (&D)[8],
+                                        const fp8e4m3_4 (&A)[2],
+                                        const fp8e4m3_4 (&B)[2],
+                                        const float2 (&C)[8]) {
+    typedef __attribute__((__vector_size__(16 * sizeof(float)))) float float16_t;
+    long a, b;
+    __builtin_memcpy(&a, &A[0], sizeof(long));
+    __builtin_memcpy(&b, &B[0], sizeof(long));
+    float16_t cc;
+    __builtin_memcpy(&cc, &C[0], sizeof(float16_t));
+    float16_t dd = __builtin_amdgcn_mfma_f32_32x32x16_fp8_fp8(a, b, cc, 0, 0, 0);
+    __builtin_memcpy(&D[0], &dd, sizeof(float16_t));
+}
+
 
 /**
  * @brief Base matrix multiply-accumulate operation for row layout.
@@ -127,6 +142,13 @@ __device__ static inline void mma_ABt_base(rt_base<float, ducks::rt_layout::col>
                                      const rt_base<BType, ducks::rt_layout::row> &b, // in row-major mode
                                      const rt_base<float, ducks::rt_layout::col> &c) {
     mfma163232(d.data, a.data, b.data, c.data);
+}
+// 32x32x16 fp8: acc base = 32x32 (float2[8]), operand base = 32x16 (fp8e4m3_4[2]).
+__device__ static inline void mma_ABt_base(rt_base<float, ducks::rt_layout::col, 32, 32> &d,
+                                     const rt_base<fp8e4m3, ducks::rt_layout::row, 32, 16> &a,
+                                     const rt_base<fp8e4m3, ducks::rt_layout::row, 32, 16> &b, // in row-major mode
+                                     const rt_base<float, ducks::rt_layout::col, 32, 32> &c) {
+    mfma323216(d.data, a.data, b.data, c.data);
 }
 /**
  * @brief Base matrix multiply-accumulate operation for row layout with transposed A.
