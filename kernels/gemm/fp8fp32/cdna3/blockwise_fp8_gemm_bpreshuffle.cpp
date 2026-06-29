@@ -199,6 +199,13 @@ __device__ inline void store_b_slab_lds(fp8e4m3 *lds, const float4 (&reg)[NF4], 
     #pragma unroll
     for (int r = 0; r < NF4; r++) dst[r * NUM_THREADS + tid] = reg[r];
 }
+// store only chunks [R0, R1) of the slab -> spread ds_write across clusters.
+template <int R0, int R1, int NF4>
+__device__ inline void store_b_slab_lds_range(fp8e4m3 *lds, const float4 (&reg)[NF4], int tid) {
+    float4 *dst = reinterpret_cast<float4*>(lds);
+    #pragma unroll
+    for (int r = R0; r < R1; r++) dst[r * NUM_THREADS + tid] = reg[r];
+}
 
 // LDS flat slab -> register B fragment (no swizzle address calc): contiguous ds_read_b64.
 template <typename RT>
@@ -283,6 +290,10 @@ void micro_tk(const micro_globals g) {
         __builtin_amdgcn_s_barrier();
     }
 
+    // first iteration's at[0],at[1] (subsequent ones are preloaded in the prior iter's C8)
+    load(at[0], subtile_inplace<REG_M, MFMA_K>(As, {warp_row, 0}));
+    load(at[1], subtile_inplace<REG_M, MFMA_K>(As, {warp_row + 2, 0}));
+
     #pragma unroll
     for (int k_step = 0; k_step < num_k_steps - 1; ++k_step) {
 
@@ -295,11 +306,10 @@ void micro_tk(const micro_globals g) {
         float sa_reg0[REG_M / 16 * 4];
         float sa_reg1[REG_M / 16 * 4];
 
-        // Cluster 0: B fragments from LDS slab (contiguous ds_read) + prefetch next B slab global->reg
+        // Cluster 0: B fragments from LDS slab + prefetch next B slab global->reg
+        // (at[0],at[1] for this step's first MMA were pulled into the previous iter's C8)
         load_b_slab_to_reg<NT_B, KT_B>(b_buffer_next, g.b, col, k_step + 1, KT_global, N, K, tid);
         float sb_next = llvm_amdgcn_s_buffer_load_f32(sb_srsrc, (k_step + 1) * 4, 0);
-        load(at[0], subtile_inplace<REG_M, MFMA_K>(As, {warp_row, 0}));
-        load(at[1], subtile_inplace<REG_M, MFMA_K>(As, {warp_row + 2, 0}));
         load_b_frag_lds(bt[0], Bs_pre, nt_local, 0, KT_B);
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
@@ -348,22 +358,33 @@ void micro_tk(const micro_globals g) {
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
-        // Cluster 6: store next A + next B slab (from reg, prefetched at Cluster 0) into LDS
+        // Cluster 6 (mem): store As + B slab first half + scale (all bt reads done after C4)
         asm volatile("s_waitcnt vmcnt(0)");     // A & B global prefetch landed in regs
         asm volatile("s_waitcnt lgkmcnt(0)");
         store_register_buffer_to_shared<NUM_THREADS>(As, a_buffer_next);
-        store_b_slab_lds<NT_B, KT_B>(Bs_pre, b_buffer_next, tid);
+        store_b_slab_lds_range<0, 2, B_SLAB_F4>(Bs_pre, b_buffer_next, tid);
         load_scale_global_reg<REG_M / 16>(sa_reg0, sa_block + k_step * M, local_m0, (uint32_t)M * 4);
         load_scale_global_reg<REG_M / 16>(sa_reg1, sa_block + k_step * M, local_m1, (uint32_t)M * 4);
         __builtin_amdgcn_s_barrier();
         __builtin_amdgcn_sched_barrier(0);
 
-        // Cluster 7 — MMA s3 + apply merged (apply VALU fills the barrier wait window)
+        // Cluster 7 — MMA s3
         __builtin_amdgcn_s_setprio(1);
         mma_ABt(partial[0], at[4], bt[3], partial[0]);
         mma_ABt(partial[1], at[3], bt[3], partial[1]);
         __builtin_amdgcn_s_setprio(0);
-        asm volatile("s_waitcnt vmcnt(0)");     // scale arrived
+        __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_sched_barrier(0);
+
+        // Cluster 8 (mem): store B slab second half + preload next step's at[0],at[1] (As ready after C6)
+        store_b_slab_lds_range<2, B_SLAB_F4, B_SLAB_F4>(Bs_pre, b_buffer_next, tid);
+        asm volatile("s_waitcnt lgkmcnt(0)");   // As store (C6) visible before reading it back
+        load(at[0], subtile_inplace<REG_M, MFMA_K>(As, {warp_row, 0}));
+        load(at[1], subtile_inplace<REG_M, MFMA_K>(As, {warp_row + 2, 0}));
+        __builtin_amdgcn_s_barrier();
+        __builtin_amdgcn_sched_barrier(0);
+
+        // Cluster 9 (apply): VALU hidden behind the paired wave's memory cluster
         apply_block_scale_1d2d_reg(C_accum[0], partial[0], sa_reg0, sb_cur);
         apply_block_scale_1d2d_reg(C_accum[1], partial[1], sa_reg1, sb_cur);
         sb_cur = sb_next;
